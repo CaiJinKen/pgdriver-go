@@ -48,6 +48,7 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 	buf.Write([]byte("application_name"))
 	buf.WriteByte(0x00)
 	buf.Write([]byte("jinPGDriver"))
+	//optional TimeZone client_encoding etc.
 	buf.WriteByte(0x00)
 	buf.WriteByte(0x00)
 
@@ -83,19 +84,33 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 		flen = binary.BigEndian.Uint32(result[point+1:point+1+4])
 		content := result[point+1+4:point+1+int(flen)]
 
-		// property messages
-		/*		for index, v := range content {
-					if result[point] == 0x52 {
-						fmt.Println("auth success.")
-						break
+		//set connection properties
+		if result[point] == 0x53 {
+			for index, v := range content {
+				if v == 0x00 {
+					value := string(content[index+1:flen-5])
+					switch string(content[:index]) {
+					case conn.application_name:
+						conn.application_name = value
+					case conn.client_encoding:
+						conn.client_encoding = value
+					case conn.DateStyle:
+						conn.DateStyle = value
+					case conn.integer_datetimes:
+						conn.integer_datetimes = value
+					case conn.IntervalStyle:
+						conn.IntervalStyle = value
+					case conn.server_version:
+						conn.server_version = value
+					case conn.server_encoding:
+						conn.server_encoding = value
 					}
-					if v == 0x00 {
-						if content[index] == 0x00 {
-							fmt.Printf("%s: %s\n", string(content[:index]), string(content[index+1:flen-5]))
-							break
-						}
-					}
-				}*/
+
+					break
+
+				}
+			}
+		}
 
 		if result[point] == 0x4b { //information about pid and key
 			pid = binary.BigEndian.Uint32(content[:4])
@@ -115,11 +130,29 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 	}
 	return conn, nil
 }
+func isBool(s string) bool {
+	if "on" == s || "true" == s || "1" == s {
+		return true
+	}
+	return false
+}
 
 type PGConn struct {
 	conn     net.Conn
 	pid, key [4]byte
 	ready    bool
+
+	//parameter status
+	application_name      string
+	client_encoding       string
+	server_encoding       string
+	server_version        string
+	session_authorization string
+	DateStyle             string
+	TimeZone              string
+	integer_datetimes     string
+	IntervalStyle         string
+	is_superuser          string
 }
 
 func (conn *PGConn) Prepare(query string) (driver.Stmt, error) {
@@ -192,7 +225,7 @@ type PGStmt struct {
 	parse      []byte //parse message
 	bind       []byte //bind message
 	describe   []byte //describe message
-	ready      bool   //if ready for next statment
+	ready      bool   //if ready for next statement
 }
 
 func (stmt *PGStmt) Close() error {
