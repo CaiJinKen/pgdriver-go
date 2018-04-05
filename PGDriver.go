@@ -1,49 +1,127 @@
 package pgdriver_go
 
 import (
+	"bytes"
 	"database/sql"
 	"database/sql/driver"
-	"net"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
-	"bytes"
-	"errors"
-	"io"
+	"net"
+	"net/url"
+	"os/user"
+	"strings"
 )
 
 const (
-	success    = iota //0
-	_                 //1
+	success = iota //0
+	_              //1
 	KerberosV5
 	PlaintText
-	_           //4
+	_ //4
 	Md5
 	SCM
 	GSSAPI
-	xSSxData    //GSSAPI & SSPI data
+	xSSxData //GSSAPI & SSPI data
 	SSPI
 )
 
 type PGDriver struct {
-	user, password, database string
+	properties map[string]string
+	cons       []*PGConn
+	protocol   []byte
+	minCon     int
+	maxCon     int
+	parsed     bool
+}
+
+func (d *PGDriver) parseUrl(name string) {
+	url, err := url.Parse(name)
+	if err != nil {
+		log.Fatal(UrlErr)
+	}
+	if protocal := url.Scheme; protocal == "postgres" || protocal == "postgresql" {
+
+	} else {
+		log.Fatal(ProtocolErr)
+	}
+	prp := make(map[string]string)
+	//username & password
+	if users := url.User; users == nil { //user current user
+		cu, err := user.Current() //only for *nux
+		if err != nil {
+			log.Fatal("Get postgres username failed.")
+		}
+		prp["user"] = cu.Username
+	} else {
+		prp["user"] = users.Username()
+		pass, set := users.Password()
+		if set {
+			prp["pass"] = pass
+		}
+	}
+	//host & ip
+	if host := url.Host; strings.Contains(host, ":") {
+		remoteAdd := strings.Split(host, ":")
+		prp["ip"] = remoteAdd[0]
+		prp["port"] = remoteAdd[1]
+	} else {
+		prp["ip"] = host
+		prp["port"] = "5432"
+	}
+	// database if not set then postgres
+	if database := url.Path; database != "" {
+		prp["database"] = strings.TrimPrefix(database, "/")
+	} else {
+		prp["database"] = "postgres"
+	}
+
+	// set default properties
+	prp["application_name"] = "pgdriver-go"
+
+	//other properties
+	prps := url.Query()
+	for key, v := range prps {
+		prp[key] = v[0]
+	}
+
+	d.properties = prp
+	d.parsed = true
+
 }
 
 func (d *PGDriver) Open(name string) (driver.Conn, error) {
-	dial, err := net.Dial("tcp", name)
+
+	//use connection pool
+	if d.parsed {
+		for _, conn := range d.cons {
+			if conn.closed {
+				return conn, nil
+			}
+		}
+	}
+
+	//set connection properties
+	d.parseUrl(name)
+
+	pro := d.properties
+	fmt.Println(pro)
+	dial, err := net.Dial("tcp", d.properties["host"]+":"+d.properties["port"])
 	if err != nil {
 		log.Fatal(err)
 	}
+	d.protocol = []byte{0x00, 0x03, 0x00, 0x00}
 
 	var buf bytes.Buffer
-	buf.Write([]byte{0x00, 0x03, 0x00, 0x00})
+	buf.Write(d.protocol)
 	buf.Write([]byte("user"))
 	buf.WriteByte(0x00)
-	buf.Write([]byte(d.user))
+	buf.Write([]byte(d.properties["user"]))
 	buf.WriteByte(0x00)
 	buf.Write([]byte("database"))
 	buf.WriteByte(0x00)
-	buf.Write([]byte(d.database))
+	buf.Write([]byte(d.properties["database"]))
 	buf.WriteByte(0x00)
 	buf.Write([]byte("application_name"))
 	buf.WriteByte(0x00)
@@ -67,9 +145,9 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 
 	if result[0] == 0x52 { //auth response 'R'
 		le := binary.BigEndian.Uint32(result[1:5])
-		code := binary.BigEndian.Uint32(result[5:le+1])
+		code := binary.BigEndian.Uint32(result[5 : le+1])
 		if code != success { //auth failed
-			return nil, errors.New("auth failed.")
+			return nil, errors.New(AuthErr)
 		}
 		fmt.Println("auth success.")
 	}
@@ -81,30 +159,33 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 	var pid, key uint32
 	var flen uint32
 	for point < n {
-		flen = binary.BigEndian.Uint32(result[point+1:point+1+4])
-		content := result[point+1+4:point+1+int(flen)]
+		flen = binary.BigEndian.Uint32(result[point+1 : point+1+4])
+		content := result[point+1+4 : point+1+int(flen)]
 
 		//set connection properties
 		if result[point] == 0x53 {
+			prp := d.properties
 			for index, v := range content {
 				if v == 0x00 {
-					value := string(content[index+1:flen-5])
-					switch string(content[:index]) {
-					case conn.application_name:
-						conn.application_name = value
-					case conn.client_encoding:
-						conn.client_encoding = value
-					case conn.DateStyle:
-						conn.DateStyle = value
-					case conn.integer_datetimes:
-						conn.integer_datetimes = value
-					case conn.IntervalStyle:
-						conn.IntervalStyle = value
-					case conn.server_version:
-						conn.server_version = value
-					case conn.server_encoding:
-						conn.server_encoding = value
-					}
+					prp[string(content[:index])] = string(content[index+1 : flen-5])
+
+					/*					value := string(content[index+1:flen-5])
+										switch string(content[:index]) {
+										case conn.application_name:
+											conn.application_name = value
+										case conn.client_encoding:
+											conn.client_encoding = value
+										case conn.DateStyle:
+											conn.DateStyle = value
+										case conn.integer_datetimes:
+											conn.integer_datetimes = value
+										case conn.IntervalStyle:
+											conn.IntervalStyle = value
+										case conn.server_version:
+											conn.server_version = value
+										case conn.server_encoding:
+											conn.server_encoding = value
+										}*/
 
 					break
 
@@ -128,80 +209,22 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 		point += 1 + int(flen)
 
 	}
+
+	//add to connection poll
+	d.cons = append(d.cons, conn)
 	return conn, nil
+}
+
+// start up message is the first message to postgresql server when application start up
+// it contains some client properties such as client_encoding datestyle timeZone
+func (dr *PGDriver) startUp() {
+
 }
 func isBool(s string) bool {
 	if "on" == s || "true" == s || "1" == s {
 		return true
 	}
 	return false
-}
-
-type PGConn struct {
-	conn     net.Conn
-	pid, key [4]byte
-	ready    bool
-
-	//parameter status
-	application_name      string
-	client_encoding       string
-	server_encoding       string
-	server_version        string
-	session_authorization string
-	DateStyle             string
-	TimeZone              string
-	integer_datetimes     string
-	IntervalStyle         string
-	is_superuser          string
-}
-
-func (conn *PGConn) Prepare(query string) (driver.Stmt, error) {
-	stmt := new(PGStmt)
-	var parse bytes.Buffer
-
-	for _, v := range query {
-		if v == '$' {
-			stmt.parameters++
-		}
-	}
-
-	//parse
-	parse.WriteByte(0x50) //parse
-	sql := []byte(query)
-	lt := make([]byte, 4)
-	binary.BigEndian.PutUint32(lt, uint32(8+len(sql))+4*uint32(stmt.parameters)) // le:4 statment:1 sql:sql+1 parameters:2 params*4
-	parse.Write(lt)                                                              //length
-	parse.WriteByte(0x00)
-	parse.Write(sql)
-	parse.WriteByte(0x00)
-
-	params := make([]byte, 2)
-	binary.BigEndian.PutUint16(params, stmt.parameters)
-	parse.Write(params) //parameters
-
-	for i := uint16(0); i < stmt.parameters; i++ {
-		parse.Write([]byte{0x00, 0x00, 0x00, 0x17})
-	}
-	stmt.parse = parse.Bytes()
-
-	stmt.conn = conn
-
-	return stmt, nil
-}
-
-func (conn *PGConn) Close() error {
-	return conn.conn.Close()
-}
-
-func (conn *PGConn) Begin() (driver.Tx, error) {
-	tx := new(PGTx)
-	tx.conn = conn
-
-	conn.conn.Write(getTemplate("BEGIN"))
-
-	//result todo
-
-	return tx, nil
 }
 
 type PGTx struct {
@@ -216,211 +239,6 @@ func (tx *PGTx) Commit() error {
 func (tx *PGTx) Rollback() error {
 	tx.conn.conn.Write(getTemplate("ROLLBACK"))
 	//result todo
-	return nil
-}
-
-type PGStmt struct {
-	conn       *PGConn
-	parameters uint16 //number of parameters
-	parse      []byte //parse message
-	bind       []byte //bind message
-	describe   []byte //describe message
-	ready      bool   //if ready for next statement
-}
-
-func (stmt *PGStmt) Close() error {
-	var err error
-	if !stmt.ready { //busy
-		err = stmt.cancel()
-	} else {
-		err = nil
-	}
-	stmt = nil
-	return err
-}
-func (stmt *PGStmt) NumInput() int {
-	return 0
-}
-func (stmt *PGStmt) prepar(args []driver.Value) ([]byte, error) { //for EXEC & Query
-	var bind, describe bytes.Buffer
-	//bind
-	bind.WriteByte(0x42)
-
-	parameters := stmt.parameters
-	var bindLen uint32
-	var format, value bytes.Buffer
-	format.Write([]byte{0x00, 0x01})
-	format.Write([]byte{0x00, 0x01})
-
-	l := make([]byte, 2)
-	binary.BigEndian.PutUint16(l, parameters)
-	value.Write(l)
-	for i := uint16(0); i < parameters; i++ {
-		arg := args[i]
-		var buf bytes.Buffer
-		err := binary.Write(&buf, binary.BigEndian, arg)
-		if err != nil {
-			return nil, err
-		}
-		bytes := buf.Bytes()
-		le := make([]byte, 4)
-		binary.BigEndian.PutUint32(le, uint32(len(bytes)))
-
-		value.Write(le)
-		value.Write(bytes)
-
-		bindLen += uint32(len(bytes))
-	}
-	bindLen += 14
-	le := make([]byte, 4)
-	binary.BigEndian.PutUint32(le, bindLen)
-
-	bind.Write(le)             //length
-	bind.WriteByte(0x00)       //portal
-	bind.WriteByte(0x00)       //statment
-	bind.Write(format.Bytes()) //format(mats,mat)
-	bind.Write(value.Bytes())  //values
-
-	bind.Write([]byte{0x00, 0x00})
-
-	stmt.bind = bind.Bytes()
-
-	//describe
-	describe.WriteByte(0x44)
-	describe.Write([]byte{0x00, 0x00, 0x00, 0x06}) //length
-	describe.WriteByte(0x50)                       //50
-	describe.WriteByte(0x00)                       //portal
-	stmt.describe = describe.Bytes()
-
-	var exec bytes.Buffer
-	exec.WriteByte(0x45)                       //execute
-	exec.Write([]byte{0x00, 0x00, 0x00, 0x09}) //length
-	exec.WriteByte(0x00)                       //portal
-	exec.Write([]byte{0x00, 0x00, 0x00, 0x00}) // all rows
-
-	var sync bytes.Buffer
-	sync.WriteByte(0x53) //sync
-	sync.Write([]byte{0x00, 0x00, 0x00, 0x04})
-
-	var payload bytes.Buffer
-	payload.Write(stmt.parse)
-	payload.Write(stmt.bind)
-	payload.Write(stmt.describe)
-	payload.Write(exec.Bytes())
-	payload.Write(sync.Bytes())
-
-	return payload.Bytes(), nil
-}
-
-func (stmt *PGStmt) Exec(args []driver.Value) (driver.Result, error) {
-	if len(args) != int(stmt.parameters) {
-		return nil, errors.New("parameters are ivalide.")
-	}
-	result := new(PGResult)
-
-	payload, err := stmt.prepar(args)
-	if err != nil {
-		return nil, err
-	}
-	stmt.conn.conn.Write(payload)
-	//todo
-	return result, nil
-}
-func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
-	rows := new(PGRows)
-
-	payload, err := stmt.prepar(args)
-	if err != nil {
-		return nil, err
-	}
-
-	conn := stmt.conn.conn
-	conn.Write(payload)
-
-	var result bytes.Buffer
-
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil && err != io.EOF {
-		result.Reset()
-	} else {
-		result.Write(buf[:n])
-	}
-
-	response := result.Bytes()
-	offset := 0
-	for offset < n {
-		le := binary.BigEndian.Uint32(response[offset+1:offset+5])
-		switch response[offset] {
-		case 0x31: //parse completion
-			fallthrough
-		case 0x32: //bind completion
-			fallthrough
-		case 0x43: //command completion //todo tag
-			fallthrough
-		case 0x5a: //ready for query 0x49:idle 0x54:is transaction
-			fallthrough
-		case 0x6e: //no data
-			offset += 1 + int(le)
-		case 0x54: //row description
-			num := binary.BigEndian.Uint16(response[offset+5:offset+7])
-			fmt.Println("colomns:", num)
-			var columns = make([]string, num)
-			content := response[offset+7:offset+int(le)]
-			start, end := offset+7, offset+len(content)
-			i := uint16(0)
-			for start < end && i < num {
-				index := bytes.IndexByte(response[start:end], 0x00)
-				index += start
-				columns[i] = string(response[start:index])
-				/*fmt.Printf("name: %s, tid:%d, cid:%d, typeid:%d, len:%d, modi:%d, format:%d\n",
-					string(response[start:index]),
-					binary.BigEndian.Uint32(response[index+1:index+1+4]),
-					binary.BigEndian.Uint16(response[index+1+4:index+1+6]),
-					binary.BigEndian.Uint32(response[index+1+6:index+1+10]),
-					binary.BigEndian.Uint16(response[index+1+10:index+1+12]),
-					binary.BigEndian.Uint32(response[index+1+12:index+1+16]),
-					binary.BigEndian.Uint16(response[index+1+16:index+1+18]))*/
-				start = index + 1 + 18
-				i++
-			}
-			offset = start
-			rows.columns = columns
-		case 0x44: //data row
-			//print data
-			num := binary.BigEndian.Uint16(response[offset+5:offset+7])
-			var data = make([]driver.Value, num)
-			pt := offset + 7
-			for i := 0; i < int(num); i++ {
-				t := response[pt:pt+4]
-				clen := binary.BigEndian.Uint32(t)
-				if clen == 4294967295 { //clen = 0xff 0xff 0xff 0xff (-1)
-					pt += 4
-					continue
-				}
-				x := pt + 4 + int(clen)
-				data[i] = string(response[pt+4:x])
-				pt = x
-			}
-			offset = pt
-			rows.Data = append(rows.Data, data)
-
-		}
-
-	}
-
-	return rows, nil
-}
-
-func (stmt *PGStmt) cancel() error {
-	var payload bytes.Buffer
-	payload.WriteByte('F')                        //cancel request
-	payload.Write([]byte{0x00, 0x00, 0x00, 0x10}) //length
-	payload.Write([]byte{0x04, 0xd2, 0x16, 0x2e})
-	payload.Write(stmt.conn.pid[:])
-	payload.Write(stmt.conn.key[:])
-
-	stmt.conn.conn.Write(payload.Bytes())
 	return nil
 }
 
@@ -490,33 +308,6 @@ func (r *PGResult) LastInsertId() (int64, error) {
 }
 func (r *PGResult) RowsAffected() (int64, error) {
 	return 0, nil
-}
-
-type PGRows struct {
-	columns []string
-	counts  uint32
-
-	Data  []([]driver.Value)
-	index int
-}
-
-func (r *PGRows) Columns() []string {
-	return r.columns
-}
-func (r *PGRows) Close() error {
-	//todo
-	return nil
-}
-func (r *PGRows) Next(dest []driver.Value) error {
-	if r.index >= len(r.Data) {
-		return errors.New("has no more data.")
-	}
-	src := r.Data[r.index]
-	for i, v := range src {
-		dest[i] = v
-	}
-	r.index++
-	return nil
 }
 
 //init
