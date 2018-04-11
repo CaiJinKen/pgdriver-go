@@ -3,6 +3,7 @@ package pgdriver_go
 import (
 	"database/sql/driver"
 	"errors"
+	"fmt"
 )
 
 type PGRows struct {
@@ -25,9 +26,17 @@ func (r *PGRows) Next(dest []driver.Value) error {
 		return errors.New(NoMoreData)
 	}
 	src := r.Data[r.index]
-	for i, v := range src {
+/*	for i, v := range src {
 		dest[i] = v
+	}*/
+	for _, v := range src {
+		if v !=nil {
+			fmt.Printf("%s\t",v)
+		} else {
+			fmt.Printf("\t")
+		}
 	}
+	fmt.Println()
 	r.index++
 	return nil
 }

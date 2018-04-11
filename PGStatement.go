@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 )
 
 type PGStmt struct {
@@ -58,7 +59,7 @@ func (stmt *PGStmt) prepar(args []driver.Value) ([]byte, error) { //for EXEC & Q
 
 		value.Write(le)
 		value.Write(bytes)
-
+		bindLen += 4
 		bindLen += uint32(len(bytes))
 	}
 	bindLen += 14
@@ -129,19 +130,34 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 
 	var result bytes.Buffer
 
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil && err != io.EOF {
-		result.Reset()
-	} else {
-		result.Write(buf[:n])
+	var n int
+	for { //read all data rows
+		buf := make([]byte, 4096)
+		bLen, err := conn.Read(buf)
+		if err != nil && err != io.EOF {
+			result.Reset()
+		} else {
+			n += bLen
+			result.Write(buf[:bLen])
+			if buf[0] == 0x45 { //error
+				err = errors.New(QueryErr)
+			}
+			if buf[bLen-6] == 0x5a { //ready for query
+				break;
+			}
+		}
+	}
+	if err != nil {
+		conn.Close()
+		fmt.Println(err)
+		os.Exit(3)
 	}
 
 	response := result.Bytes()
 	offset := 0
 	for offset < n {
-		le := binary.BigEndian.Uint32(response[offset+1 : offset+5])
-		num := binary.BigEndian.Uint16(response[offset+5 : offset+7])
+		le := binary.BigEndian.Uint32(response[offset+1: offset+5])
+		num := binary.BigEndian.Uint16(response[offset+5: offset+7])
 		switch response[offset] {
 		case 0x31: //parse completion
 			fallthrough
@@ -156,7 +172,7 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 		case 0x54: //row description
 			fmt.Println("colomns:", num)
 			var columns = make([]string, num)
-			content := response[offset+7 : offset+int(le)]
+			content := response[offset+7: offset+int(le)]
 			start, end := offset+7, offset+len(content)
 			i := uint16(0)
 			for start < end && i < num {
@@ -181,21 +197,21 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 			var data = make([]driver.Value, num)
 			pt := offset + 7
 			for i := 0; i < int(num); i++ {
-				t := response[pt : pt+4]
+				t := response[pt: pt+4]
 				clen := binary.BigEndian.Uint32(t)
 				if clen == 4294967295 { //clen = 0xff 0xff 0xff 0xff (-1)
 					pt += 4
 					continue
 				}
 				x := pt + 4 + int(clen)
-				data[i] = string(response[pt+4 : x])
+				data[i] = string(response[pt+4: x])
 				pt = x
 			}
 			offset = pt
 			rows.Data = append(rows.Data, data)
 
 		case 0x45: //error
-			return nil, errors.New("Errors returns.")
+			return nil, errors.New(QueryErr)
 
 		}
 

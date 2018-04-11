@@ -12,6 +12,7 @@ type PGConn struct {
 	pid, key [4]byte
 	ready    bool // if ready for next statement
 	closed   bool // if been closed
+	in_tx    bool
 
 	//parameter status
 	properties            map[string]string

@@ -107,7 +107,8 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 
 	pro := d.properties
 	fmt.Println(pro)
-	dial, err := net.Dial("tcp", d.properties["host"]+":"+d.properties["port"])
+	addr:=d.properties["ip"]+":"+d.properties["port"]
+	dial, err := net.Dial("tcp", addr)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -168,27 +169,7 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 			for index, v := range content {
 				if v == 0x00 {
 					prp[string(content[:index])] = string(content[index+1 : flen-5])
-
-					/*					value := string(content[index+1:flen-5])
-										switch string(content[:index]) {
-										case conn.application_name:
-											conn.application_name = value
-										case conn.client_encoding:
-											conn.client_encoding = value
-										case conn.DateStyle:
-											conn.DateStyle = value
-										case conn.integer_datetimes:
-											conn.integer_datetimes = value
-										case conn.IntervalStyle:
-											conn.IntervalStyle = value
-										case conn.server_version:
-											conn.server_version = value
-										case conn.server_encoding:
-											conn.server_encoding = value
-										}*/
-
 					break
-
 				}
 			}
 		}
@@ -216,7 +197,7 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 }
 
 // start up message is the first message to postgresql server when application start up
-// it contains some client properties such as client_encoding datestyle timeZone
+// it contains some client properties such as client_encoding datestyle ticolumn_2meZone
 func (dr *PGDriver) startUp() {
 
 }

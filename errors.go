@@ -7,4 +7,5 @@ var (
 	CmdErr      = "Unsupported command."
 	NoMoreData  = "Has no more data."
 	ParamErr    = "Parameters are invalid."
+	QueryErr    = "Error returns when query."
 )
