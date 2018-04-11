@@ -15,16 +15,19 @@ import (
 )
 
 const (
-	success = iota //0
-	_              //1
+	success    = iota //0
+	_                 //1
 	KerberosV5
 	PlaintText
-	_ //4
+	_           //4
 	Md5
 	SCM
 	GSSAPI
-	xSSxData //GSSAPI & SSPI data
+	xSSxData    //GSSAPI & SSPI data
 	SSPI
+)
+const (
+	ZeroByte = 0x00
 )
 
 type PGDriver struct {
@@ -107,7 +110,7 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 
 	pro := d.properties
 	fmt.Println(pro)
-	addr:=d.properties["ip"]+":"+d.properties["port"]
+	addr := d.properties["ip"] + ":" + d.properties["port"]
 	dial, err := net.Dial("tcp", addr)
 	if err != nil {
 		log.Fatal(err)
@@ -117,19 +120,19 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 	var buf bytes.Buffer
 	buf.Write(d.protocol)
 	buf.Write([]byte("user"))
-	buf.WriteByte(0x00)
+	buf.WriteByte(ZeroByte)
 	buf.Write([]byte(d.properties["user"]))
-	buf.WriteByte(0x00)
+	buf.WriteByte(ZeroByte)
 	buf.Write([]byte("database"))
-	buf.WriteByte(0x00)
+	buf.WriteByte(ZeroByte)
 	buf.Write([]byte(d.properties["database"]))
-	buf.WriteByte(0x00)
+	buf.WriteByte(ZeroByte)
 	buf.Write([]byte("application_name"))
-	buf.WriteByte(0x00)
+	buf.WriteByte(ZeroByte)
 	buf.Write([]byte("jinPGDriver"))
 	//optional TimeZone client_encoding etc.
-	buf.WriteByte(0x00)
-	buf.WriteByte(0x00)
+	buf.WriteByte(ZeroByte)
+	buf.WriteByte(ZeroByte)
 
 	length := make([]byte, 4)
 	binary.BigEndian.PutUint32(length, uint32(buf.Len()+4))
@@ -146,7 +149,7 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 
 	if result[0] == 0x52 { //auth response 'R'
 		le := binary.BigEndian.Uint32(result[1:5])
-		code := binary.BigEndian.Uint32(result[5 : le+1])
+		code := binary.BigEndian.Uint32(result[5: le+1])
 		if code != success { //auth failed
 			return nil, errors.New(AuthErr)
 		}
@@ -160,15 +163,15 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 	var pid, key uint32
 	var flen uint32
 	for point < n {
-		flen = binary.BigEndian.Uint32(result[point+1 : point+1+4])
-		content := result[point+1+4 : point+1+int(flen)]
+		flen = binary.BigEndian.Uint32(result[point+1: point+1+4])
+		content := result[point+1+4: point+1+int(flen)]
 
 		//set connection properties
 		if result[point] == 0x53 {
 			prp := d.properties
 			for index, v := range content {
-				if v == 0x00 {
-					prp[string(content[:index])] = string(content[index+1 : flen-5])
+				if v == ZeroByte {
+					prp[string(content[:index])] = string(content[index+1: flen-5])
 					break
 				}
 			}
@@ -223,16 +226,128 @@ func (tx *PGTx) Rollback() error {
 	return nil
 }
 
+func getParse(stmt, query string, params uint16) []byte {
+	//parse
+	var parse, stmtBuf, queryBuf bytes.Buffer
+	var parseLen uint32 = 6 //length+params
+	parse.WriteByte(0x50)   //parse
+
+	if stmt != "" {
+		stmtBuf.Write([]byte(stmt))
+	}
+	stmtBuf.WriteByte(ZeroByte)
+	parseLen += uint32(stmtBuf.Len())
+
+	if query != "" {
+		queryBuf.Write([]byte(query))
+	}
+	queryBuf.WriteByte(ZeroByte)
+
+	parseLen += uint32(queryBuf.Len())
+
+	parse.Write(getUint32Byte(parseLen)) //length
+	parse.Write(stmtBuf.Bytes())         //statement
+	parse.Write(queryBuf.Bytes())        //query
+	parse.Write(getUint16Byte(params))   //parameters
+
+	return parse.Bytes()
+}
+
+func getBind(portal, stmt string) []byte {
+	//bind
+	var bind bytes.Buffer
+	bind.WriteByte(0x42)
+
+	var bindLen uint32 = 4 //length`s length
+	var portalBuf, stmtBuf, format, value bytes.Buffer
+	format.Write([]byte{ZeroByte, 0x01})
+	value.Write([]byte{ZeroByte, 0x01})
+	bindLen += 4 //format+value
+
+	if portal != "" {
+		portalBuf.Write([]byte(portal))
+	} else {
+		portalBuf.WriteByte(ZeroByte)
+	}
+
+	if stmt != "" {
+		stmtBuf.Write([]byte(stmt))
+	} else {
+		stmtBuf.WriteByte(ZeroByte)
+	}
+
+	bindLen += uint32(portalBuf.Len())
+	bindLen += uint32(stmtBuf.Len())
+	bindLen += 2 //length of format
+
+	bind.Write(getUint32Byte(bindLen)) //length
+	bind.Write(portalBuf.Bytes())      //portal
+	bind.Write(stmtBuf.Bytes())        //statment
+	bind.Write(format.Bytes())         //format(mats,mat)
+	bind.Write(value.Bytes())          //values
+
+	bind.Write([]byte{ZeroByte, ZeroByte}) //result format
+	return bind.Bytes()
+}
+
+func getExec(portal string, rows uint32) []byte {
+	var exec, portalBuf bytes.Buffer
+	var execLen uint32 = 8 //length + returns
+
+	le := make([]byte, 4)
+	exec.WriteByte(0x45) //execute
+
+	if portal != "" {
+		portalBuf.Write([]byte(portal))
+		portalBuf.WriteByte(ZeroByte)
+		execLen += uint32(portalBuf.Len())
+	} else {
+		portalBuf.WriteByte(ZeroByte)
+	}
+	binary.BigEndian.PutUint32(le, execLen)
+	exec.Write(getUint32Byte(execLen)) //length
+	exec.Write(portalBuf.Bytes())
+	exec.WriteByte(ZeroByte)                   //portal end
+	exec.Write([]byte{0x00, 0x00, 0x00, 0x00}) // all rows
+	return exec.Bytes()
+}
+
+func getDesc(portal string) []byte {
+	//describe
+	var describe, portalBuf bytes.Buffer
+	var length uint32 = 6 //length + 0x50 +zeroByte
+	le := make([]byte, 4)
+
+	portalBuf.WriteByte(0x50)
+	if portal != "" {
+		portalBuf.Write([]byte(portal))
+		length += uint32(portalBuf.Len())
+	}
+
+	describe.WriteByte(0x44)
+	describe.Write(le)                //length
+	describe.Write(portalBuf.Bytes()) //portal
+	describe.WriteByte(ZeroByte)
+	return describe.Bytes()
+}
+
+func getSync() []byte {
+	var sync bytes.Buffer
+	sync.WriteByte(0x53) //sync
+	sync.Write([]byte{0x00, 0x00, 0x00, 0x04})
+	return sync.Bytes()
+}
+
 func getTemplate(command string) []byte {
 	//parse
 	var parse bytes.Buffer
-	parse.WriteByte(0x50)                       //parse
-	parse.Write([]byte{0x00, 0x00, 0x00, 0x0d}) //length
-	parse.WriteByte(0x00)                       //statement
+	parse.WriteByte(0x50)                                   //parse
+	parse.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x0d}) //length
+	parse.WriteByte(ZeroByte)                               //statement
 	parse.Write([]byte(command))
-	parse.WriteByte(0x00)
-	parse.WriteByte(0x00)
-	parse.WriteByte(0x00)
+	parse.WriteByte(ZeroByte)
+	parse.WriteByte(ZeroByte)
+	parse.WriteByte(ZeroByte)
 
 	var bind, describe bytes.Buffer
 	//bind
