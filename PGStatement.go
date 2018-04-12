@@ -155,9 +155,12 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 
 	response := result.Bytes()
 	offset := 0
+	var num uint16
 	for offset < n {
 		le := binary.BigEndian.Uint32(response[offset+1: offset+5])
-		num := binary.BigEndian.Uint16(response[offset+5: offset+7])
+		if response[offset] != 0x5a {
+			num = binary.BigEndian.Uint16(response[offset+5: offset+7])
+		}
 		switch response[offset] {
 		case 0x31: //parse completion
 			fallthrough
@@ -166,6 +169,7 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 		case 0x43: //command completion //todo tag
 			fallthrough
 		case 0x5a: //ready for query 0x49:idle 0x54:is transaction
+			stmt.ready = true
 			fallthrough
 		case 0x6e: //no data
 			offset += 1 + int(le)

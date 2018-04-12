@@ -226,9 +226,19 @@ func (tx *PGTx) Rollback() error {
 	return nil
 }
 
+func getParseStr(stmt,query string) []byte{
+	var parameters uint16
+	for _, v := range query {
+		if v == '$' {
+			parameters++
+		}
+	}
+	return getParse(stmt,query,parameters)
+}
+
 func getParse(stmt, query string, params uint16) []byte {
 	//parse
-	var parse, stmtBuf, queryBuf bytes.Buffer
+	var parse, stmtBuf, queryBuf,paraTypes bytes.Buffer
 	var parseLen uint32 = 6 //length+params
 	parse.WriteByte(0x50)   //parse
 
@@ -240,15 +250,23 @@ func getParse(stmt, query string, params uint16) []byte {
 
 	if query != "" {
 		queryBuf.Write([]byte(query))
+	} else{
+
 	}
 	queryBuf.WriteByte(ZeroByte)
 
+	for i := uint16(0); i < params; i++ {
+		paraTypes.Write([]byte{0x00, 0x00, 0x00, 0x17})
+	}
+
 	parseLen += uint32(queryBuf.Len())
+	parseLen += uint32(paraTypes.Len())
 
 	parse.Write(getUint32Byte(parseLen)) //length
 	parse.Write(stmtBuf.Bytes())         //statement
 	parse.Write(queryBuf.Bytes())        //query
 	parse.Write(getUint16Byte(params))   //parameters
+	parse.Write(paraTypes.Bytes())
 
 	return parse.Bytes()
 }
@@ -308,7 +326,7 @@ func getExec(portal string, rows uint32) []byte {
 	exec.Write(getUint32Byte(execLen)) //length
 	exec.Write(portalBuf.Bytes())
 	exec.WriteByte(ZeroByte)                   //portal end
-	exec.Write([]byte{0x00, 0x00, 0x00, 0x00}) // all rows
+	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, ZeroByte}) // all rows
 	return exec.Bytes()
 }
 

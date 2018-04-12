@@ -74,7 +74,16 @@ func (conn *PGConn) Begin() (driver.Tx, error) {
 	tx := new(PGTx)
 	tx.conn = conn
 
-	conn.conn.Write(getTemplate("BEGIN"))
+	var payload bytes.Buffer
+	payload.Write(getParse("","BEGIN",0))
+	payload.Write(getBind("",""))
+	payload.Write(getDesc(""))
+	payload.Write(getExec("",0))
+	payload.Write(getSync())
+
+	conn.conn.Write(payload.Bytes())
+
+	//conn.conn.Write(getTemplate("BEGIN"))
 
 	//result todo
 
