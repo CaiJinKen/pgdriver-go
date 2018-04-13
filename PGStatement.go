@@ -40,8 +40,8 @@ func (stmt *PGStmt) prepar(args []driver.Value) ([]byte, error) { //for EXEC & Q
 	parameters := stmt.parameters
 	var bindLen uint32
 	var format, value bytes.Buffer
-	format.Write([]byte{0x00, 0x01})
-	format.Write([]byte{0x00, 0x01})
+	format.Write([]byte{ZeroByte, 0x01})
+	format.Write([]byte{ZeroByte, 0x01})
 
 	l := make([]byte, 2)
 	binary.BigEndian.PutUint16(l, parameters)
@@ -67,31 +67,31 @@ func (stmt *PGStmt) prepar(args []driver.Value) ([]byte, error) { //for EXEC & Q
 	binary.BigEndian.PutUint32(le, bindLen)
 
 	bind.Write(le)             //length
-	bind.WriteByte(0x00)       //portal
-	bind.WriteByte(0x00)       //statment
+	bind.WriteByte(ZeroByte)       //portal
+	bind.WriteByte(ZeroByte)       //statment
 	bind.Write(format.Bytes()) //format(mats,mat)
 	bind.Write(value.Bytes())  //values
 
-	bind.Write([]byte{0x00, 0x00})
+	bind.Write([]byte{ZeroByte, ZeroByte})
 
 	stmt.bind = bind.Bytes()
 
 	//describe
 	describe.WriteByte(0x44)
-	describe.Write([]byte{0x00, 0x00, 0x00, 0x06}) //length
+	describe.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x06}) //length
 	describe.WriteByte(0x50)                       //50
-	describe.WriteByte(0x00)                       //portal
+	describe.WriteByte(ZeroByte)                       //portal
 	stmt.describe = describe.Bytes()
 
 	var exec bytes.Buffer
 	exec.WriteByte(0x45)                       //execute
-	exec.Write([]byte{0x00, 0x00, 0x00, 0x09}) //length
-	exec.WriteByte(0x00)                       //portal
-	exec.Write([]byte{0x00, 0x00, 0x00, 0x00}) // all rows
+	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x09}) //length
+	exec.WriteByte(ZeroByte)                       //portal
+	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, ZeroByte}) // all rows
 
 	var sync bytes.Buffer
 	sync.WriteByte(0x53) //sync
-	sync.Write([]byte{0x00, 0x00, 0x00, 0x04})
+	sync.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x04})
 
 	var payload bytes.Buffer
 	payload.Write(stmt.parse)
@@ -125,8 +125,9 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 		return nil, err
 	}
 
+	stmt.conn.payload = append(stmt.conn.payload,payload...)
 	conn := stmt.conn.conn
-	conn.Write(payload)
+	conn.Write(stmt.conn.payload)
 
 	var result bytes.Buffer
 
@@ -142,7 +143,7 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 			if buf[0] == 0x45 { //error
 				err = errors.New(QueryErr)
 			}
-			if buf[bLen-6] == 0x5a { //ready for query
+			if bLen>5 && buf[bLen-6] == 0x5a { //ready for query
 				break;
 			}
 		}
@@ -180,7 +181,7 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 			start, end := offset+7, offset+len(content)
 			i := uint16(0)
 			for start < end && i < num {
-				index := bytes.IndexByte(response[start:end], 0x00)
+				index := bytes.IndexByte(response[start:end], ZeroByte)
 				index += start
 				columns[i] = string(response[start:index])
 				/*fmt.Printf("name: %s, tid:%d, cid:%d, typeid:%d, len:%d, modi:%d, format:%d\n",
@@ -227,7 +228,7 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 func (stmt *PGStmt) cancel() error {
 	var payload bytes.Buffer
 	payload.WriteByte('F')                        //cancel request
-	payload.Write([]byte{0x00, 0x00, 0x00, 0x10}) //length
+	payload.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x10}) //length
 	payload.Write([]byte{0x04, 0xd2, 0x16, 0x2e})
 	payload.Write(stmt.conn.pid[:])
 	payload.Write(stmt.conn.key[:])

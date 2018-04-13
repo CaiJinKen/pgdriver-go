@@ -9,7 +9,7 @@ func getUint32Byte(len uint32) []byte{
 }
 
 func getUint16Byte(len uint16) []byte{
-	le := make([]byte, 4)
+	le := make([]byte, 2)
 	binary.BigEndian.PutUint16(le, len)
 	return le
 }

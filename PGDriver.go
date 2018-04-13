@@ -115,7 +115,7 @@ func (d *PGDriver) Open(name string) (driver.Conn, error) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	d.protocol = []byte{0x00, 0x03, 0x00, 0x00}
+	d.protocol = []byte{ZeroByte, 0x03, ZeroByte, ZeroByte}
 
 	var buf bytes.Buffer
 	buf.Write(d.protocol)
@@ -226,19 +226,19 @@ func (tx *PGTx) Rollback() error {
 	return nil
 }
 
-func getParseStr(stmt,query string) []byte{
+func getParseStr(stmt, query string) []byte {
 	var parameters uint16
 	for _, v := range query {
 		if v == '$' {
 			parameters++
 		}
 	}
-	return getParse(stmt,query,parameters)
+	return getParse(stmt, query, parameters)
 }
 
 func getParse(stmt, query string, params uint16) []byte {
 	//parse
-	var parse, stmtBuf, queryBuf,paraTypes bytes.Buffer
+	var parse, stmtBuf, queryBuf, paraTypes bytes.Buffer
 	var parseLen uint32 = 6 //length+params
 	parse.WriteByte(0x50)   //parse
 
@@ -250,13 +250,11 @@ func getParse(stmt, query string, params uint16) []byte {
 
 	if query != "" {
 		queryBuf.Write([]byte(query))
-	} else{
-
 	}
 	queryBuf.WriteByte(ZeroByte)
 
 	for i := uint16(0); i < params; i++ {
-		paraTypes.Write([]byte{0x00, 0x00, 0x00, 0x17})
+		paraTypes.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x17})
 	}
 
 	parseLen += uint32(queryBuf.Len())
@@ -266,37 +264,58 @@ func getParse(stmt, query string, params uint16) []byte {
 	parse.Write(stmtBuf.Bytes())         //statement
 	parse.Write(queryBuf.Bytes())        //query
 	parse.Write(getUint16Byte(params))   //parameters
-	parse.Write(paraTypes.Bytes())
+	if params > 0 {
+		parse.Write(paraTypes.Bytes())
+	}
 
 	return parse.Bytes()
 }
 
-func getBind(portal, stmt string) []byte {
+func getBind(portal, stmt string, args []driver.Value) []byte {
 	//bind
-	var bind bytes.Buffer
+	var bind, format, value, stmtBuf, portalBuf bytes.Buffer
+	var bindLen uint32 = 4
+
 	bind.WriteByte(0x42)
 
-	var bindLen uint32 = 4 //length`s length
-	var portalBuf, stmtBuf, format, value bytes.Buffer
-	format.Write([]byte{ZeroByte, 0x01})
-	value.Write([]byte{ZeroByte, 0x01})
-	bindLen += 4 //format+value
+	parameters := uint16(len(args))
 
-	if portal != "" {
-		portalBuf.Write([]byte(portal))
-	} else {
-		portalBuf.WriteByte(ZeroByte)
+	value.Write(getUint16Byte(parameters))
+	for i := uint16(0); i < parameters; i++ {
+		arg := args[i]
+		var buf bytes.Buffer
+		err := binary.Write(&buf, binary.BigEndian, arg)
+		if err != nil {
+			return bind.Bytes()
+		}
+		bytes := buf.Bytes()
+		le := make([]byte, 4)
+		binary.BigEndian.PutUint32(le, uint32(len(bytes)))
+
+		value.Write(le)
+		value.Write(bytes)
+		bindLen += 4
+		bindLen += uint32(len(bytes))
 	}
 
-	if stmt != "" {
+	if parameters > 0 {
+		format.Write([]byte{ZeroByte, 0x01})
+	} else {
+		format.Write([]byte{ZeroByte, ZeroByte})
+	}
+	if stmt == "" {
+		stmtBuf.Write([]byte{ZeroByte, ZeroByte})
+	} else {
 		stmtBuf.Write([]byte(stmt))
-	} else {
-		stmtBuf.WriteByte(ZeroByte)
 	}
 
-	bindLen += uint32(portalBuf.Len())
-	bindLen += uint32(stmtBuf.Len())
-	bindLen += 2 //length of format
+	if portal == "" {
+		portalBuf.Write([]byte{ZeroByte, ZeroByte})
+	} else {
+		portalBuf.Write([]byte(portal))
+	}
+
+	bindLen += uint32(portalBuf.Len()) + uint32(stmtBuf.Len()) + uint32(format.Len()) + uint32(value.Len()) + 2
 
 	bind.Write(getUint32Byte(bindLen)) //length
 	bind.Write(portalBuf.Bytes())      //portal
@@ -310,22 +329,19 @@ func getBind(portal, stmt string) []byte {
 
 func getExec(portal string, rows uint32) []byte {
 	var exec, portalBuf bytes.Buffer
-	var execLen uint32 = 8 //length + returns
+	var execLen uint32 = 4 //length + returns
 
-	le := make([]byte, 4)
 	exec.WriteByte(0x45) //execute
 
 	if portal != "" {
 		portalBuf.Write([]byte(portal))
-		portalBuf.WriteByte(ZeroByte)
-		execLen += uint32(portalBuf.Len())
-	} else {
-		portalBuf.WriteByte(ZeroByte)
 	}
-	binary.BigEndian.PutUint32(le, execLen)
+	portalBuf.WriteByte(ZeroByte)//portal end
+	execLen += uint32(portalBuf.Len())
+	execLen += 4 //rows
+
 	exec.Write(getUint32Byte(execLen)) //length
 	exec.Write(portalBuf.Bytes())
-	exec.WriteByte(ZeroByte)                   //portal end
 	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, ZeroByte}) // all rows
 	return exec.Bytes()
 }
@@ -352,7 +368,7 @@ func getDesc(portal string) []byte {
 func getSync() []byte {
 	var sync bytes.Buffer
 	sync.WriteByte(0x53) //sync
-	sync.Write([]byte{0x00, 0x00, 0x00, 0x04})
+	sync.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x04})
 	return sync.Bytes()
 }
 
@@ -373,36 +389,36 @@ func getTemplate(command string) []byte {
 
 	var bindLen uint32
 	var format, value bytes.Buffer
-	format.Write([]byte{0x00, 0x01})
-	value.Write([]byte{0x00, 0x01})
+	format.Write([]byte{ZeroByte, 0x01})
+	value.Write([]byte{ZeroByte, 0x01})
 
 	bindLen += 14
 	le := make([]byte, 4)
 	binary.BigEndian.PutUint32(le, bindLen)
 
 	bind.Write(le)             //length
-	bind.WriteByte(0x00)       //portal
-	bind.WriteByte(0x00)       //statment
+	bind.WriteByte(ZeroByte)       //portal
+	bind.WriteByte(ZeroByte)       //statment
 	bind.Write(format.Bytes()) //format(mats,mat)
 	bind.Write(value.Bytes())  //values
 
-	bind.Write([]byte{0x00, 0x00}) //result format
+	bind.Write([]byte{ZeroByte, ZeroByte}) //result format
 
 	//describe
 	describe.WriteByte(0x44)
-	describe.Write([]byte{0x00, 0x00, 0x00, 0x06}) //length
+	describe.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x06}) //length
 	describe.WriteByte(0x50)                       //50
-	describe.WriteByte(0x00)                       //portal
+	describe.WriteByte(ZeroByte)                       //portal
 
 	var exec bytes.Buffer
 	exec.WriteByte(0x45)                       //execute
-	exec.Write([]byte{0x00, 0x00, 0x00, 0x09}) //length
-	exec.WriteByte(0x00)                       //portal
-	exec.Write([]byte{0x00, 0x00, 0x00, 0x00}) // all rows
+	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x09}) //length
+	exec.WriteByte(ZeroByte)                       //portal
+	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, ZeroByte}) // all rows
 
 	var sync bytes.Buffer
 	sync.WriteByte(0x53) //sync
-	sync.Write([]byte{0x00, 0x00, 0x00, 0x04})
+	sync.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x04})
 
 	var payload bytes.Buffer
 	payload.Write(parse.Bytes())
