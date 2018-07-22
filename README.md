@@ -5,7 +5,7 @@ Usage:
 
 get connection:
 ```
-pgUrl := "postgres://kong@127.0.0.1"
+pgUrl := "postgres://username:password@host-ip:port"
 driver := &pgdriver_go.PGDriver{}
 conn, err := driver.Open(pgUrl)
 ```
