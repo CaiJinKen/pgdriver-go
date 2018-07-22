@@ -27,7 +27,7 @@ type PGConn struct {
 	is_superuser          string
 
 	//
-	payload  []byte
+	payload []byte
 }
 
 func (conn *PGConn) Query(query string, args []driver.Value) (driver.Rows, error) {
@@ -36,39 +36,14 @@ func (conn *PGConn) Query(query string, args []driver.Value) (driver.Rows, error
 
 func (conn *PGConn) Prepare(query string) (driver.Stmt, error) {
 	stmt := new(PGStmt)
-	/*	var parse bytes.Buffer
 
-		for _, v := range query {
-			if v == '$' {
-				stmt.parameters++
-			}
-		}
-
-		//parse
-		parse.WriteByte(0x50) //parse
-		sql := []byte(query)
-		lt := make([]byte, 4)
-		binary.BigEndian.PutUint32(lt, uint32(8+len(sql))+4*uint32(stmt.parameters)) // le:4 statment:1 sql:sql+1 parameters:2 params*4
-		parse.Write(lt)                                                              //length
-		parse.WriteByte(ZeroByte)
-		parse.Write(sql)
-		parse.WriteByte(0x00)
-
-		params := make([]byte, 2)
-		binary.BigEndian.PutUint16(params, stmt.parameters)
-		parse.Write(params) //parameters
-
-		for i := uint16(0); i < stmt.parameters; i++ {
-			parse.Write([]byte{0x00, 0x00, 0x00, 0x17})
-		}
-		stmt.parse = parse.Bytes()*/
 	for _, v := range query {
 		if v == '$' {
 			stmt.parameters++
 		}
 	}
 	//stmt.parse = getParseStr("", query)
-	conn.payload = append(conn.payload,getParseStr("", query)...)
+	conn.payload = append(conn.payload, getParseStr("", query)...)
 
 	stmt.conn = conn
 
@@ -85,13 +60,13 @@ func (conn *PGConn) Begin() (driver.Tx, error) {
 
 	var payload bytes.Buffer
 	payload.Write(getParse("", "BEGIN", 0))
-	payload.Write(getBind("", "",nil))
+	payload.Write(getBind("", "", nil))
 	//payload.Write(getDesc(""))
 	payload.Write(getExec("", 0))
 	//payload.Write(getSync())
 
 	//conn.conn.Write(payload.Bytes())
-	conn.payload = append(conn.payload,payload.Bytes()...)
+	conn.payload = append(conn.payload, payload.Bytes()...)
 
 	//conn.conn.Write(getTemplate("BEGIN"))
 

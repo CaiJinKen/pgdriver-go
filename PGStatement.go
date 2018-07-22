@@ -67,8 +67,8 @@ func (stmt *PGStmt) prepar(args []driver.Value) ([]byte, error) { //for EXEC & Q
 	binary.BigEndian.PutUint32(le, bindLen)
 
 	bind.Write(le)             //length
-	bind.WriteByte(ZeroByte)       //portal
-	bind.WriteByte(ZeroByte)       //statment
+	bind.WriteByte(ZeroByte)   //portal
+	bind.WriteByte(ZeroByte)   //statment
 	bind.Write(format.Bytes()) //format(mats,mat)
 	bind.Write(value.Bytes())  //values
 
@@ -79,14 +79,14 @@ func (stmt *PGStmt) prepar(args []driver.Value) ([]byte, error) { //for EXEC & Q
 	//describe
 	describe.WriteByte(0x44)
 	describe.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x06}) //length
-	describe.WriteByte(0x50)                       //50
-	describe.WriteByte(ZeroByte)                       //portal
+	describe.WriteByte(0x50)                                   //50
+	describe.WriteByte(ZeroByte)                               //portal
 	stmt.describe = describe.Bytes()
 
 	var exec bytes.Buffer
-	exec.WriteByte(0x45)                       //execute
-	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x09}) //length
-	exec.WriteByte(ZeroByte)                       //portal
+	exec.WriteByte(0x45)                                       //execute
+	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x09})     //length
+	exec.WriteByte(ZeroByte)                                   //portal
 	exec.Write([]byte{ZeroByte, ZeroByte, ZeroByte, ZeroByte}) // all rows
 
 	var sync bytes.Buffer
@@ -125,7 +125,7 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 		return nil, err
 	}
 
-	stmt.conn.payload = append(stmt.conn.payload,payload...)
+	stmt.conn.payload = append(stmt.conn.payload, payload...)
 	conn := stmt.conn.conn
 	conn.Write(stmt.conn.payload)
 
@@ -143,8 +143,8 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 			if buf[0] == 0x45 { //error
 				err = errors.New(QueryErr)
 			}
-			if bLen>5 && buf[bLen-6] == 0x5a { //ready for query
-				break;
+			if bLen > 5 && buf[bLen-6] == 0x5a { //ready for query
+				break
 			}
 		}
 	}
@@ -158,9 +158,9 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 	offset := 0
 	var num uint16
 	for offset < n {
-		le := binary.BigEndian.Uint32(response[offset+1: offset+5])
+		le := binary.BigEndian.Uint32(response[offset+1 : offset+5])
 		if response[offset] != 0x5a {
-			num = binary.BigEndian.Uint16(response[offset+5: offset+7])
+			num = binary.BigEndian.Uint16(response[offset+5 : offset+7])
 		}
 		switch response[offset] {
 		case 0x31: //parse completion
@@ -177,21 +177,13 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 		case 0x54: //row description
 			fmt.Println("colomns:", num)
 			var columns = make([]string, num)
-			content := response[offset+7: offset+int(le)]
+			content := response[offset+7 : offset+int(le)]
 			start, end := offset+7, offset+len(content)
 			i := uint16(0)
 			for start < end && i < num {
 				index := bytes.IndexByte(response[start:end], ZeroByte)
 				index += start
 				columns[i] = string(response[start:index])
-				/*fmt.Printf("name: %s, tid:%d, cid:%d, typeid:%d, len:%d, modi:%d, format:%d\n",
-				string(response[start:index]),
-				binary.BigEndian.Uint32(response[index+1:index+1+4]),
-				binary.BigEndian.Uint16(response[index+1+4:index+1+6]),
-				binary.BigEndian.Uint32(response[index+1+6:index+1+10]),
-				binary.BigEndian.Uint16(response[index+1+10:index+1+12]),
-				binary.BigEndian.Uint32(response[index+1+12:index+1+16]),
-				binary.BigEndian.Uint16(response[index+1+16:index+1+18]))*/
 				start = index + 1 + 18
 				i++
 			}
@@ -202,14 +194,14 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 			var data = make([]driver.Value, num)
 			pt := offset + 7
 			for i := 0; i < int(num); i++ {
-				t := response[pt: pt+4]
+				t := response[pt : pt+4]
 				clen := binary.BigEndian.Uint32(t)
 				if clen == 4294967295 { //clen = 0xff 0xff 0xff 0xff (-1)
 					pt += 4
 					continue
 				}
 				x := pt + 4 + int(clen)
-				data[i] = string(response[pt+4: x])
+				data[i] = string(response[pt+4 : x])
 				pt = x
 			}
 			offset = pt
@@ -227,7 +219,7 @@ func (stmt *PGStmt) Query(args []driver.Value) (driver.Rows, error) {
 
 func (stmt *PGStmt) cancel() error {
 	var payload bytes.Buffer
-	payload.WriteByte('F')                        //cancel request
+	payload.WriteByte('F')                                    //cancel request
 	payload.Write([]byte{ZeroByte, ZeroByte, ZeroByte, 0x10}) //length
 	payload.Write([]byte{0x04, 0xd2, 0x16, 0x2e})
 	payload.Write(stmt.conn.pid[:])

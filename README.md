@@ -5,10 +5,9 @@ Usage:
 
 get connection:
 ```
-
-driver := &PGDriver{user: "postgres", password: "postgres", database: "postgres"}
-address := "127.0.0.1:5432"
-conn, err := driver.Open(address)
+pgUrl := "postgres://kong@127.0.0.1"
+driver := &pgdriver_go.PGDriver{}
+conn, err := driver.Open(pgUrl)
 ```
 
 simple query:
